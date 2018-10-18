@@ -1,6 +1,12 @@
 package com.onelogin.aws.assume.role.cli;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +19,8 @@ import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
@@ -30,7 +38,6 @@ import com.amazonaws.services.securitytoken.model.Credentials;
 import com.onelogin.saml2.authn.SamlResponse;
 import com.onelogin.saml2.http.HttpRequest;
 import com.onelogin.sdk.conn.Client;
-import com.onelogin.sdk.util.Settings;
 import com.onelogin.sdk.model.Device;
 import com.onelogin.sdk.model.MFA;
 import com.onelogin.sdk.model.SAMLEndpointResponse;
@@ -226,13 +233,15 @@ public class OneloginAWSCLI {
 							System.out.println("Role selected: " + roleName + " (Account " + accountId + ")");
 							selectedRole = roleData.get(0);
 						} else if (roleData.size() > 1) {
+							HashMap<String, String> aliasMap = getAliasMap(samlResponse);
 							System.out.println("\nAvailable AWS Roles");
 							System.out.println("-----------------------------------------------------------------------");
 							for (int j = 0; j < roleData.size(); j++) {
 								String[] roleInfo = roleData.get(j).split(":");
 								String accountId = roleInfo[4];
-								String roleName = roleInfo[5].replace("role/", "");
-								System.out.println(" " + j + " | " + roleName + " (Account " + accountId + ")");
+								String roleName = roleInfo[5].replace("role/", "").replace(",arn", "");
+								String alias = aliasMap.get(accountId);
+								System.out.println(j + " | " + alias + " | " + roleName + " | " + accountId);
 							}
 							System.out.println("-----------------------------------------------------------------------");
 							System.out.print("Select the desired Role [0-" + (roleData.size() - 1) + "]: ");
@@ -326,6 +335,44 @@ public class OneloginAWSCLI {
 		} finally {
 			scanner.close();
 		}
+	}
+
+	public static HashMap<String, String> getAliasMap(String samlResponse) throws Exception {
+		System.out.println("Evaluating AWS Alias Map");
+
+		String urlParameters = URLEncoder.encode("SAMLResponse", "UTF-8") + "=" + URLEncoder.encode(samlResponse, "UTF-8");
+		String request = "https://signin.aws.amazon.com/saml";
+		
+		URL url = new URL(request);
+		
+		HttpURLConnection conn= (HttpURLConnection)url.openConnection();           
+		
+		conn.setDoOutput(true);
+		conn.setInstanceFollowRedirects(false);
+		conn.setRequestMethod("POST");
+		conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded"); 
+		conn.setUseCaches(false);
+
+		OutputStreamWriter wr = new OutputStreamWriter(conn.getOutputStream());
+		wr.write(urlParameters);
+		wr.flush();
+
+		BufferedReader br = new BufferedReader(new InputStreamReader((conn.getInputStream())));
+		StringBuilder sb = new StringBuilder();
+		String output;
+		while ((output = br.readLine()) != null) {
+			sb.append(output);
+		}
+
+		String htmlString = sb.toString();
+		Document doc = Jsoup.parse(htmlString);
+		HashMap<String, String> aliasMap = new HashMap<String,String>();
+		List<String> links = doc.select(".saml-account-name").eachText();
+		for(String item : links){
+			String[] bits = item.split(" ");
+			aliasMap.put(bits[2].replace("(", "").replace(")", ""), bits[1]);
+		}
+		return aliasMap;
 	}
 
 	public static Map<String, Object> getSamlResponse(Client olClient, Scanner scanner, String oneloginUsernameOrEmail,
