@@ -55,6 +55,7 @@ public class OneloginAWSCLI {
 	private static String awsAccount = null;
 	private static String awsRole = null;
 	private static String ip = null;
+	private static Boolean scan = null;
 
 	public static Boolean commandParser(final String[] commandLineArguments) {
 		final CommandLineParser cmd = new DefaultParser();
@@ -156,6 +157,8 @@ public class OneloginAWSCLI {
 				}
 			}
 
+			scan = commandLine.hasOption("scan");
+
 			return true;
 		}
 		catch (ParseException parseException) {
@@ -178,6 +181,7 @@ public class OneloginAWSCLI {
 		options.addOption("u", "username", true, "Onelogin username.");
 		options.addOption("c", "account", true, "AWS Account to automatically map to.  Requires 'role'.");
 		options.addOption("o", "role", true, "AWS Role to automatically map to.  Requires 'account'.");
+		options.addOption("s", "scan", false, "Scan all available accounts / roles and rotate keys, default to AWS profile mode and use AWS alias as the profile name");
 
 		return options;
 	}
@@ -239,146 +243,186 @@ public class OneloginAWSCLI {
 					TimeUnit.MINUTES.sleep(time);
 				}
 
-				result = getSamlResponse(olClient, scanner, oneloginUsernameOrEmail, oneloginPassword, appId,
-						oneloginDomain, mfaVerifyInfo, ip);
+				result = getSamlResponse(olClient, scanner, oneloginUsernameOrEmail, oneloginPassword, appId, oneloginDomain, mfaVerifyInfo, ip);
 				mfaVerifyInfo = (Map<String, String>) result.get("mfaVerifyInfo");
 				samlResponse = (String) result.get("samlResponse");
 
-				if (i == 0) {
-					HttpRequest simulatedRequest = new HttpRequest("http://example.com");
-					simulatedRequest = simulatedRequest.addParameter("SAMLResponse", samlResponse);
-					SamlResponse samlResponseObj = new SamlResponse(null, simulatedRequest);
-					HashMap<String, List<String>> attributes = samlResponseObj.getAttributes();
+				if (scan) {
+					HashMap<String, List<String>> attributes = getSamlResponseAttributes(samlResponse);
 					if (!attributes.containsKey("https://aws.amazon.com/SAML/Attributes/Role")) {
 						System.out.print("SAMLResponse from Identity Provider does not contain AWS Role info");
 						System.exit(0);
 					} else {
-						String selectedRole = "";
 						List<String> roleData = attributes.get("https://aws.amazon.com/SAML/Attributes/Role");
-						if (awsAccount != null && awsRole != null) {
-							for (int j = 0; j < roleData.size(); j++) {
-								String role = roleData.get(j);
-								String[] roleInfo = role.split(":");
-								String accountId = roleInfo[4];
-								String roleName = roleInfo[5].replace("role/", "").replace(",arn", "");
-								if (awsAccount.equals(accountId) && awsRole.equals(roleName)) {
-									selectedRole = role;
-									break;
-								}
-							}
-							if (selectedRole.isEmpty()) {
-								System.out.print("Unable to automatically map provided AWS Account / Role");
-								System.exit(0);	
-							}
-						} else if (roleData.size() == 1) {
-							String[] roleInfo = roleData.get(0).split(":");
-							String accountId = roleInfo[4];
-							String roleName = roleInfo[5].replace("role/", "");
-							System.out.println("Role selected: " + roleName + " (Account " + accountId + ")");
-							selectedRole = roleData.get(0);
-						} else if (roleData.size() > 1) {
-							HashMap<String, String> aliasMap = getAliasMap(samlResponse);
-							System.out.println("\nAvailable AWS Roles");
-							System.out.println("-----------------------------------------------------------------------");
-							for (int j = 0; j < roleData.size(); j++) {
-								String[] roleInfo = roleData.get(j).split(":");
-								String accountId = roleInfo[4];
-								String roleName = roleInfo[5].replace("role/", "").replace(",arn", "");
-								String alias = aliasMap.get(accountId);
-								System.out.println(j + " | " + alias + " | " + roleName + " | " + accountId);
-							}
-							System.out.println("-----------------------------------------------------------------------");
-							System.out.print("Select the desired Role [0-" + (roleData.size() - 1) + "]: ");
-							Integer roleSelection = Integer.valueOf(scanner.next());
-							selectedRole = roleData.get(roleSelection);
-						} else {
-							System.out.print("SAMLResponse from Identity Provider does not contain available AWS Role for this user");
-							System.exit(0);
-						}
+						HashMap<String, String> aliasMap = getAliasMap(samlResponse);
 
-						if (!selectedRole.isEmpty()) {
-							String[] selectedRoleData = selectedRole.split(",");
+						for (int j = 0; j < roleData.size(); j++) {
+							String role = roleData.get(j);
+							String[] selectedRoleData = role.split(",");
+
+							String[] roleInfo = roleData.get(j).split(":");
+							String accountId = roleInfo[4];
+
 							roleArn = selectedRoleData[0];
 							principalArn = selectedRoleData[1];
+							profileName = aliasMap.get(accountId);
+							
+							assumeRole(principalArn, roleArn, samlResponse, awsRegion, profileName, file);
 						}
 					}
 				}
-
-				AssumeRoleWithSAMLRequest assumeRoleWithSAMLRequest = new AssumeRoleWithSAMLRequest()
-						.withPrincipalArn(principalArn).withRoleArn(roleArn).withSAMLAssertion(samlResponse);
-
-				if (i == 0) {
-					// AWS REGION
-					if (awsRegion == null) {
-						System.out.print("AWS Region (" + defaultAWSRegion + "): ");
-						awsRegion = scanner.next();
-						if (awsRegion.isEmpty() || awsRegion.equals("-")) {
-							awsRegion = defaultAWSRegion;
+				else {
+					if (i == 0) {
+						HashMap<String, List<String>> attributes = getSamlResponseAttributes(samlResponse);
+						if (!attributes.containsKey("https://aws.amazon.com/SAML/Attributes/Role")) {
+							System.out.print("SAMLResponse from Identity Provider does not contain AWS Role info");
+							System.exit(0);
+						} else {
+							String selectedRole = "";
+							List<String> roleData = attributes.get("https://aws.amazon.com/SAML/Attributes/Role");
+							if (awsAccount != null && awsRole != null) {
+								for (int j = 0; j < roleData.size(); j++) {
+									String role = roleData.get(j);
+									String[] roleInfo = role.split(":");
+									String accountId = roleInfo[4];
+									String roleName = roleInfo[5].replace("role/", "").replace(",arn", "");
+									if (awsAccount.equals(accountId) && awsRole.equals(roleName)) {
+										selectedRole = role;
+										break;
+									}
+								}
+								if (selectedRole.isEmpty()) {
+									System.out.print("Unable to automatically map provided AWS Account / Role");
+									System.exit(0);	
+								}
+							} else if (roleData.size() == 1) {
+								String[] roleInfo = roleData.get(0).split(":");
+								String accountId = roleInfo[4];
+								String roleName = roleInfo[5].replace("role/", "");
+								System.out.println("Role selected: " + roleName + " (Account " + accountId + ")");
+								selectedRole = roleData.get(0);
+							} else if (roleData.size() > 1) {
+								HashMap<String, String> aliasMap = getAliasMap(samlResponse);
+								System.out.println("\nAvailable AWS Roles");
+								System.out.println("-----------------------------------------------------------------------");
+								for (int j = 0; j < roleData.size(); j++) {
+									String[] roleInfo = roleData.get(j).split(":");
+									String accountId = roleInfo[4];
+									String roleName = roleInfo[5].replace("role/", "").replace(",arn", "");
+									String alias = aliasMap.get(accountId);
+									System.out.println(j + " | " + alias + " | " + roleName + " | " + accountId);
+								}
+								System.out.println("-----------------------------------------------------------------------");
+								System.out.print("Select the desired Role [0-" + (roleData.size() - 1) + "]: ");
+								Integer roleSelection = Integer.valueOf(scanner.next());
+								selectedRole = roleData.get(roleSelection);
+							} else {
+								System.out.print("SAMLResponse from Identity Provider does not contain available AWS Role for this user");
+								System.exit(0);
+							}
+	
+							if (!selectedRole.isEmpty()) {
+								String[] selectedRoleData = selectedRole.split(",");
+								roleArn = selectedRoleData[0];
+								principalArn = selectedRoleData[1];
+							}
 						}
-					}else {
-						System.out.print("AWS Region: " + awsRegion);
 					}
+		
+					if (i == 0) {
+						// AWS REGION
+						if (awsRegion == null) {
+							System.out.print("AWS Region (" + defaultAWSRegion + "): ");
+							awsRegion = scanner.next();
+							if (awsRegion.isEmpty() || awsRegion.equals("-")) {
+								awsRegion = defaultAWSRegion;
+							}
+						}else {
+							System.out.print("AWS Region: " + awsRegion);
+						}
+					}
+	
+					assumeRole(principalArn, roleArn, samlResponse, awsRegion, profileName, file);
 				}
 
-				BasicAWSCredentials awsCredentials = new BasicAWSCredentials("", "");
-
-				AWSSecurityTokenServiceClientBuilder stsBuilder = AWSSecurityTokenServiceClientBuilder.standard();
-
-				AWSSecurityTokenService stsClient = stsBuilder.withRegion(awsRegion)
-						.withCredentials(new AWSStaticCredentialsProvider(awsCredentials)).build();
-
-				AssumeRoleWithSAMLResult assumeRoleWithSAMLResult = stsClient
-						.assumeRoleWithSAML(assumeRoleWithSAMLRequest);
-				Credentials stsCredentials = assumeRoleWithSAMLResult.getCredentials();
-				AssumedRoleUser assumedRoleUser = assumeRoleWithSAMLResult.getAssumedRoleUser();
-
-				if (profileName == null && file == null) {
-					String action = "export";
-					if (System.getProperty("os.name").toLowerCase().contains("win")) {
-						action = "set";
-					}
-					System.out.println("\n-----------------------------------------------------------------------\n");
-					System.out.println("Success!\n");
-					System.out.println("Assumed Role User: " + assumedRoleUser.getArn() + "\n");
-					System.out.println("Temporary AWS Credentials Granted via OneLogin\n");
-					System.out.println("Copy/Paste to set these as environment variables\n");
-					System.out.println("-----------------------------------------------------------------------\n");
-
-					System.out.println(action + " AWS_SESSION_TOKEN=" + stsCredentials.getSessionToken());
-					System.out.println();
-					System.out.println(action + " AWS_ACCESS_KEY_ID=" + stsCredentials.getAccessKeyId());
-					System.out.println();
-					System.out.println(action + " AWS_SECRET_ACCESS_KEY=" + stsCredentials.getSecretAccessKey());
-					System.out.println();
-				} else {
-					if (file == null) {
-						file = AwsProfileFileLocationProvider.DEFAULT_CREDENTIALS_LOCATION_PROVIDER.getLocation();
-					}
-					if (profileName == null) {
-						profileName = "default";
-					}
-
-					Map<String, String> properties = new HashMap<String, String>();
-					properties.put(ProfileKeyConstants.AWS_ACCESS_KEY_ID, stsCredentials.getAccessKeyId());
-					properties.put(ProfileKeyConstants.AWS_SECRET_ACCESS_KEY, stsCredentials.getSecretAccessKey());
-					properties.put(ProfileKeyConstants.AWS_SESSION_TOKEN, stsCredentials.getSessionToken());
-					properties.put(ProfileKeyConstants.REGION, awsRegion);
-
-					ProfilesConfigFileWriter.modifyOneProfile(file, profileName, new Profile(profileName, properties, null));
-
-					System.out.println("\n-----------------------------------------------------------------------");
-					System.out.println("Success!\n");
-					System.out.println("Temporary AWS Credentials Granted via OneLogin\n");
-					System.out.println("Updated AWS profile '" + profileName + "' located at " + file.getAbsolutePath());
-					if (loop > (i+1)) {
-						System.out.println("This process will regenerate credentials " + (loop - (i+1)) + " more times.\n");
-						System.out.println("Press Ctrl + C to exit");
-					}
+				if (loop > (i+1)) {
+					System.out.println("This process will regenerate credentials " + (loop - (i+1)) + " more times.\n");
+					System.out.println("Press Ctrl + C to exit");
 				}
 			}
 		} finally {
 			scanner.close();
 		}
+	}
+
+	public static void assumeRole(String principalArn, String roleArn, String samlResponse, String awsRegion, String profileName, File file) throws Exception {
+	
+		BasicAWSCredentials awsCredentials = new BasicAWSCredentials("", "");
+	
+		AWSSecurityTokenServiceClientBuilder stsBuilder = AWSSecurityTokenServiceClientBuilder.standard();
+
+		AWSSecurityTokenService stsClient = stsBuilder
+			.withRegion(awsRegion)
+			.withCredentials(new AWSStaticCredentialsProvider(awsCredentials))
+			.build();
+
+		AssumeRoleWithSAMLRequest assumeRoleWithSAMLRequest = new AssumeRoleWithSAMLRequest()
+				.withPrincipalArn(principalArn)
+				.withRoleArn(roleArn)
+				.withSAMLAssertion(samlResponse);
+				
+		AssumeRoleWithSAMLResult assumeRoleWithSAMLResult = stsClient
+				.assumeRoleWithSAML(assumeRoleWithSAMLRequest);
+		Credentials stsCredentials = assumeRoleWithSAMLResult.getCredentials();
+		AssumedRoleUser assumedRoleUser = assumeRoleWithSAMLResult.getAssumedRoleUser();
+
+		if (profileName == null && file == null) {
+			String action = "export";
+			if (System.getProperty("os.name").toLowerCase().contains("win")) {
+				action = "set";
+			}
+			System.out.println("\n-----------------------------------------------------------------------\n");
+			System.out.println("Success!\n");
+			System.out.println("Assumed Role User: " + assumedRoleUser.getArn() + "\n");
+			System.out.println("Temporary AWS Credentials Granted via OneLogin\n");
+			System.out.println("Copy/Paste to set these as environment variables\n");
+			System.out.println("-----------------------------------------------------------------------\n");
+
+			System.out.println(action + " AWS_SESSION_TOKEN=" + stsCredentials.getSessionToken());
+			System.out.println();
+			System.out.println(action + " AWS_ACCESS_KEY_ID=" + stsCredentials.getAccessKeyId());
+			System.out.println();
+			System.out.println(action + " AWS_SECRET_ACCESS_KEY=" + stsCredentials.getSecretAccessKey());
+			System.out.println();
+		} else {
+			if (file == null) {
+				file = AwsProfileFileLocationProvider.DEFAULT_CREDENTIALS_LOCATION_PROVIDER.getLocation();
+			}
+			if (profileName == null) {
+				profileName = "default";
+			}
+
+			Map<String, String> properties = new HashMap<String, String>();
+			properties.put(ProfileKeyConstants.AWS_ACCESS_KEY_ID, stsCredentials.getAccessKeyId());
+			properties.put(ProfileKeyConstants.AWS_SECRET_ACCESS_KEY, stsCredentials.getSecretAccessKey());
+			properties.put(ProfileKeyConstants.AWS_SESSION_TOKEN, stsCredentials.getSessionToken());
+			properties.put(ProfileKeyConstants.REGION, awsRegion);
+
+			ProfilesConfigFileWriter.modifyOneProfile(file, profileName, new Profile(profileName, properties, null));
+
+			System.out.println("\n-----------------------------------------------------------------------");
+			System.out.println("Success!\n");
+			System.out.println("Temporary AWS Credentials Granted via OneLogin\n");
+			System.out.println("Updated AWS profile '" + profileName + "' located at " + file.getAbsolutePath());
+		}
+
+	}
+
+	public static HashMap<String, List<String>> getSamlResponseAttributes(String samlResponse) throws Exception {
+		HttpRequest simulatedRequest = new HttpRequest("http://example.com");
+		simulatedRequest = simulatedRequest.addParameter("SAMLResponse", samlResponse);
+		SamlResponse samlResponseObj = new SamlResponse(null, simulatedRequest);
+		return samlResponseObj.getAttributes();
 	}
 
 	public static HashMap<String, String> getAliasMap(String samlResponse) throws Exception {
