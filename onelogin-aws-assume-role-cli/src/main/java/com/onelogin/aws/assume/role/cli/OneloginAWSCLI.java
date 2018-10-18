@@ -52,6 +52,8 @@ public class OneloginAWSCLI {
 	private static String appId = null;
 	private static String oneloginDomain = null;
 	private static String awsRegion = null;
+	private static String awsAccount = null;
+	private static String awsRole = null;
 	private static String ip = null;
 
 	public static Boolean commandParser(final String[] commandLineArguments) {
@@ -130,6 +132,30 @@ public class OneloginAWSCLI {
 				}
 			}
 
+			if (commandLine.hasOption("account")) {
+				if (commandLine.hasOption("role")) {
+					value = commandLine.getOptionValue("account");
+					if (value != null && !value.isEmpty()) {
+						awsAccount = value;
+					}	
+				}
+				else {
+					throw new ParseException(" : Account option requires 'role' to be specified");
+				}
+			}
+
+			if (commandLine.hasOption("role")) {
+				if (commandLine.hasOption("account")) {
+					value = commandLine.getOptionValue("role");
+					if (value != null && !value.isEmpty()) {
+						awsRole = value;
+					}	
+				}
+				else {
+					throw new ParseException(" : Role option requires 'account' to be specified");
+				}
+			}
+
 			return true;
 		}
 		catch (ParseException parseException) {
@@ -140,6 +166,7 @@ public class OneloginAWSCLI {
 
 	public static Options buildOptions() {
 		final Options options = new Options();
+		
 		options.addOption("h", "help", false, "Show the help guide");
 		options.addOption("t", "time", true, "Sleep time between iterations, in minutes  [15-60 min]");
 		options.addOption("l", "loop", true, "Number of iterations");
@@ -149,7 +176,9 @@ public class OneloginAWSCLI {
 		options.addOption("a", "appid", true, "Set AWS App ID.");
 		options.addOption("d", "subdomain", true, "Onelogin Instance Sub Domain.");
 		options.addOption("u", "username", true, "Onelogin username.");
-		
+		options.addOption("c", "account", true, "AWS Account to automatically map to.  Requires 'role'.");
+		options.addOption("o", "role", true, "AWS Role to automatically map to.  Requires 'account'.");
+
 		return options;
 	}
 
@@ -183,7 +212,7 @@ public class OneloginAWSCLI {
 					System.out.print("OneLogin Username: ");
 					if (oneloginUsernameOrEmail == null) {
 						oneloginUsernameOrEmail = scanner.next();
-					}else{
+					} else{
 						System.out.println(oneloginUsernameOrEmail);
 					}
 
@@ -196,7 +225,7 @@ public class OneloginAWSCLI {
 					System.out.print("AWS App ID: ");
 					if (appId == null) {
 						appId = scanner.next();
-					}else {
+					} else {
 							System.out.println(appId);
 					}
 
@@ -226,7 +255,22 @@ public class OneloginAWSCLI {
 					} else {
 						String selectedRole = "";
 						List<String> roleData = attributes.get("https://aws.amazon.com/SAML/Attributes/Role");
-						if (roleData.size() == 1) {
+						if (awsAccount != null && awsRole != null) {
+							for (int j = 0; j < roleData.size(); j++) {
+								String role = roleData.get(j);
+								String[] roleInfo = role.split(":");
+								String accountId = roleInfo[4];
+								String roleName = roleInfo[5].replace("role/", "").replace(",arn", "");
+								if (awsAccount.equals(accountId) && awsRole.equals(roleName)) {
+									selectedRole = role;
+									break;
+								}
+							}
+							if (selectedRole.isEmpty()) {
+								System.out.print("Unable to automatically map provided AWS Account / Role");
+								System.exit(0);	
+							}
+						} else if (roleData.size() == 1) {
 							String[] roleInfo = roleData.get(0).split(":");
 							String accountId = roleInfo[4];
 							String roleName = roleInfo[5].replace("role/", "");
