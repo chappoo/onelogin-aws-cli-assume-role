@@ -80,8 +80,8 @@ public class OneloginAWSCLI {
 				if (time < 15 ) {
 					time = 15;
 				}
-				if (time > 60 ) {
-					time = 60;
+				if (time > 720 ) {
+					time = 720;
 				}
 			}
 			if (commandLine.hasOption("loop")) {
@@ -171,7 +171,7 @@ public class OneloginAWSCLI {
 		final Options options = new Options();
 		
 		options.addOption("h", "help", false, "Show the help guide");
-		options.addOption("t", "time", true, "Sleep time between iterations, in minutes  [15-60 min]");
+		options.addOption("t", "time", true, "Sleep time between iterations, in minutes  [15-720 min]");
 		options.addOption("l", "loop", true, "Number of iterations");
 		options.addOption("p", "profile", true, "Save temporary AWS credentials using that profile name");
 		options.addOption("f", "file", true, "Set a custom path to save the AWS credentials. (if not used, default AWS path is used)");
@@ -240,6 +240,7 @@ public class OneloginAWSCLI {
 						System.out.println(oneloginDomain);
 					}
 				} else {
+					System.out.println("Pausing for " + time + " minutes...");
 					TimeUnit.MINUTES.sleep(time);
 				}
 
