@@ -248,8 +248,16 @@ public class OneloginAWSCLI {
 				mfaVerifyInfo = (Map<String, String>) result.get("mfaVerifyInfo");
 				samlResponse = (String) result.get("samlResponse");
 
+				Integer sessionDurationSeconds = 3600;
+				HashMap<String, List<String>> attributes = getSamlResponseAttributes(samlResponse);
+
+				if (attributes.containsKey("https://aws.amazon.com/SAML/Attributes/SessionDuration")) {
+					List<String> sessionDurationData = attributes.get("https://aws.amazon.com/SAML/Attributes/SessionDuration");
+					sessionDurationSeconds = Integer.parseInt(sessionDurationData.get(0));
+				}
+
 				if (scan) {
-					HashMap<String, List<String>> attributes = getSamlResponseAttributes(samlResponse);
+
 					if (!attributes.containsKey("https://aws.amazon.com/SAML/Attributes/Role")) {
 						System.out.print("SAMLResponse from Identity Provider does not contain AWS Role info");
 						System.exit(0);
@@ -268,13 +276,12 @@ public class OneloginAWSCLI {
 							principalArn = selectedRoleData[1];
 							profileName = aliasMap.get(accountId);
 							
-							assumeRole(principalArn, roleArn, samlResponse, awsRegion, profileName, file);
+							assumeRole(principalArn, roleArn, samlResponse, awsRegion, profileName, file, sessionDurationSeconds);
 						}
 					}
 				}
 				else {
 					if (i == 0) {
-						HashMap<String, List<String>> attributes = getSamlResponseAttributes(samlResponse);
 						if (!attributes.containsKey("https://aws.amazon.com/SAML/Attributes/Role")) {
 							System.out.print("SAMLResponse from Identity Provider does not contain AWS Role info");
 							System.exit(0);
@@ -342,8 +349,8 @@ public class OneloginAWSCLI {
 							System.out.print("AWS Region: " + awsRegion);
 						}
 					}
-	
-					assumeRole(principalArn, roleArn, samlResponse, awsRegion, profileName, file);
+					
+					assumeRole(principalArn, roleArn, samlResponse, awsRegion, profileName, file, sessionDurationSeconds);
 				}
 
 				if (loop > (i+1)) {
@@ -356,7 +363,7 @@ public class OneloginAWSCLI {
 		}
 	}
 
-	public static void assumeRole(String principalArn, String roleArn, String samlResponse, String awsRegion, String profileName, File file) throws Exception {
+	public static void assumeRole(String principalArn, String roleArn, String samlResponse, String awsRegion, String profileName, File file, Integer sessionDurationSeconds) throws Exception {
 	
 		BasicAWSCredentials awsCredentials = new BasicAWSCredentials("", "");
 	
@@ -368,6 +375,7 @@ public class OneloginAWSCLI {
 			.build();
 
 		AssumeRoleWithSAMLRequest assumeRoleWithSAMLRequest = new AssumeRoleWithSAMLRequest()
+				.withDurationSeconds(sessionDurationSeconds)
 				.withPrincipalArn(principalArn)
 				.withRoleArn(roleArn)
 				.withSAMLAssertion(samlResponse);
